@@ -4,10 +4,13 @@ from requests.exceptions import ConnectionError
 from requests.exceptions import TooManyRedirects
 from requests.exceptions import InvalidSchema
 from requests.exceptions import ReadTimeout
+from requests.exceptions import MissingSchema
 import shutil
 import os
 
 import argparse
+from PIL import UnidentifiedImageError
+from PIL import Image
 
 class ImageDownloader:
 
@@ -22,6 +25,10 @@ class ImageDownloader:
     def get_starting_index(self , path):
 
         files = os.listdir(path)
+
+        if len(files) == 0:
+            return 0
+
         indexes = [int(file_.split(".")[0]) for file_ in files]
 
         return max(indexes) + 1
@@ -31,37 +38,51 @@ class ImageDownloader:
         if os.path.isdir(save_dir) == False:
             os.mkdir(save_dir)
             print("Directory {} created.".format(save_dir))
-            link_tested_count = 0
+            current_image_index = 0
         else:
-            link_tested_count = self.get_starting_index(save_dir)
+            current_image_index = self.get_starting_index(save_dir)
+
 
         if image_count > len(self.links):
             print("there are less image found than required")
             image_count = len(self.links)
             print("Setting max image count to : {}".format(image_count))
 
+        try:
+
+            visited_link_index = current_image_index
+
+            for _ in self.links:
+                link = self.links[visited_link_index]
+                ext = self.get_ext(link)
+                path = os.path.join(save_dir , str(current_image_index) + "." + ext )
+
+                if self.download(link , path , ext):
+                    print("{}.downloaded => {}".format(current_image_index , link))
+
+                    current_image_index += 1
+                    if current_image_index >= image_count:
+                        break
+                else:
+                    print("Could not download : {}".format(link))
 
 
-        for _ in self.links:
-            link = self.links[link_tested_count]
-            path = os.path.join(save_dir , str(link_tested_count) + "." + self.get_ext(link) )
+                visited_link_index += 1
 
-            if self.download(link , path):
+        except KeyboardInterrupt:
+            print("Exiting")
 
-                print("{}.downloaded => {}".format(link_tested_count , link))
-                if link_tested_count >= image_count:
-                    break
-            else:
-                print("Could not download : {}".format(link))
+        finally:
 
-            link_tested_count += 1
+            if image_count != current_image_index:
+                print("Could download required number of image,total image downloaded : {}".format(current_image_index))
 
-    def download(self , url , save_path):
+    def download(self , url , save_path , ext):
 
         res = None
 
         try:
-            res = requests.get(url , timeout = 25 ,  stream = True)
+            res = requests.get(url , timeout = 120,  stream = True)
         except HTTPError :
             return False
         except ConnectionError:
@@ -73,19 +94,42 @@ class ImageDownloader:
         except ReadTimeout:
             print("timed out.")
             return False
+        except MissingSchema:
+            return False
 
+        return self.save_response(res , save_path , ext)
+
+
+
+    def save_response(self , res , save_path ,  ext):
 
         with open(save_path, "wb") as f:
             res.raw.decode_content = True
             shutil.copyfileobj(res.raw , f)
+
+        if self.is_valid(save_path):
+            return True
+
+        os.remove(save_path)
+
+        return False
+
+
+    def is_valid(self , path):
+
+        try:
+            Image.open(path)
+        except UnidentifiedImageError:
+            print("Invalid image")
+            return False
         return True
+
 
 
 
     def get_ext(self , url):
         parts = url.split('.')
         ext = parts[-1]
-
         if ext in ["jpg" , "jpeg"  , "gif" , "tiff" , "png"]:
             return ext
         return "jpg"
